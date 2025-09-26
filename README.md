@@ -9,7 +9,7 @@ HeralDNS automatically registers Docker containers in DNS, making them discovera
 
 ## The Problem
 
-You're running Docker containers with IPv6 addresses that should be globally routable. Your ISP might change your IPv6 prefix. You want:
+You're running Docker containers with IPv6 addresses that are globally routable. However, Watchtower updates your container, and its IP address changes.  Or your ISP changes your prefix. You want:
 
 - Containers automatically registered in DNS when they start
 - DNS records updated when IP addresses change (dynamic prefixes)
@@ -17,13 +17,13 @@ You're running Docker containers with IPv6 addresses that should be globally rou
 - Secure updates to your DNS server
 - Fine-grained control over which containers get registered
 
-Traditional solutions like manual DNS entries break with dynamic prefixes. NAT "solves" this for IPv4 but defeats the purpose of IPv6's global routability. Container-native DNS solutions don't integrate with your existing DNS infrastructure.
+Traditional solutions like manual DNS entries break when address or prefixes change. NAT "solves" this but defeats the purpose of IPv6's global routability. Container-native DNS solutions don't integrate with your existing DNS infrastructure.
 
 **HeralDNS solves this.** It watches your containers, detects IP changes, and keeps your DNS server in sync—automatically.
 
 ## Features
 
-- 🌍 **IPv6-First**: Built for globally routable IPv6, handles dynamic prefix changes gracefully
+- 🌍 **IPv6-First**: Built for globally routable IPv6, handles dynamic changes gracefully
 - 🔐 **Secure Authentication**: GSS-TSIG (Kerberos) for Active Directory DNS, TSIG keys for BIND/PowerDNS
 - 🏷️ **Label-Based Control**: Fine-grained per-container configuration using Docker labels
 - 🔄 **Automatic Sync**: Detects IP changes and updates DNS in real-time
