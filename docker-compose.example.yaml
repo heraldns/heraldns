@@ -1,0 +1,232 @@
+version: '3.8'
+
+services:
+  heraldns:
+    build: .
+    container_name: heraldns
+    restart: unless-stopped
+    
+    # Mount Docker socket to watch containers
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Optional: mount keytab instead of using base64 env var or password
+      # - ./service.keytab:/keytab:ro
+    
+    environment:
+      # DNS Provider Configuration
+      DNS_PROVIDER: "gss-tsig"  # or "tsig"
+      DNS_SERVER: "dc01.example.com"  # FQDN or IP
+      DNS_ZONES: "example.com,internal.local"  # Comma-separated
+      
+      # Kerberos Configuration (for gss-tsig)
+      KRB_PRINCIPAL: "svc-docker-dns@EXAMPLE.COM"
+      
+      # Option 1: Password (simplest)
+      KRB_PASSWORD: "password"
+      
+      # Option 2: Base64-encoded keytab (generate with: base64 -w0 service.keytab)
+      # KRB_KEYTAB_BASE64: "BQIAAABNAAEACkVYQU1QTEUuQ09NAA..."
+      
+      # Option 3: Mount keytab as volume (see volumes above)
+      
+      # TSIG Configuration (for tsig provider)
+      # TSIG_KEY_NAME: "update-key"
+      # TSIG_KEY_SECRET: "base64secret=="
+      # TSIG_ALGORITHM: "hmac-sha256"
+      
+      # Registration Settings
+      REGISTER_ALL: "false"  # If true, registers all containers unless dns.ignore=true
+      EXPLICIT_SUBDOMAINS: "false"  # If true, requires exact zone match
+      
+      # Default Settings
+      DEFAULT_NETWORK: "public"
+      DNS_TTL: "300"
+      POLL_INTERVAL: "60"
+    
+    networks:
+      - public
+
+networks:
+  public:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+        - subnet: 2001:db8:1::/64
+
+# =============================================================================
+# Example Containers - Different Registration Patterns
+# =============================================================================
+
+  # Example 1: Basic registration with FQDN
+  web-server:
+    image: nginx:alpine
+    labels:
+      dns.enable: "true"
+      dns.fqdn: "www.example.com"
+    networks:
+      - public
+
+  # Example 2: Registration with hostname + domain
+  api-server:
+    image: nginx:alpine
+    labels:
+      dns.enable: "true"
+      dns.hostname: "api"
+      dns.domain: "example.com"
+    networks:
+      - public
+
+  # Example 3: Multiple zones (no domain specified)
+  database:
+    image: postgres:alpine
+    labels:
+      dns.enable: "true"
+      dns.hostname: "postgres"
+      # Registers in ALL zones: postgres.example.com AND postgres.internal.local
+    networks:
+      - public
+
+  # Example 4: Subdomain registration
+  staging-app:
+    image: nginx:alpine
+    labels:
+      dns.enable: "true"
+      dns.hostname: "app"
+      dns.domain: "staging.example.com"
+      # With EXPLICIT_SUBDOMAINS=false, creates app.staging in zone example.com
+    networks:
+      - public
+
+  # Example 5: IPv6-only registration
+  modern-service:
+    image: nginx:alpine
+    labels:
+      dns.enable: "true"
+      dns.aaaa.fqdn: "modern.example.com"
+      # Only creates AAAA record
+    networks:
+      - public
+
+  # Example 6: IPv4-only registration
+  legacy-service:
+    image: nginx:alpine
+    labels:
+      dns.enable: "true"
+      dns.a.fqdn: "legacy.example.com"
+      # Only creates A record
+    networks:
+      - public
+
+  # Example 7: Web server with CNAME aliases
+  main-web:
+    image: nginx:alpine
+    labels:
+      dns.enable: "true"
+      dns.fqdn: "web01.example.com"
+      dns.cname.hostname: "www,blog,shop"
+      # Creates A/AAAA for web01.example.com
+      # Plus CNAMEs: www, blog, shop → web01.example.com
+    networks:
+      - public
+
+  # Example 8: API with version aliasing
+  api-v2:
+    image: myapi:v2
+    labels:
+      dns.enable: "true"
+      dns.fqdn: "api-v2.example.com"
+      dns.cname.hostname: "api"
+      # Current version accessible via api.example.com → api-v2.example.com
+    networks:
+      - public
+
+  # Example 9: CNAME with explicit FQDNs
+  load-balancer:
+    image: nginx:alpine
+    labels:
+      dns.enable: "true"
+      dns.fqdn: "lb01.example.com"
+      dns.cname.fqdn: "www.example.com,api.example.com"
+      # Multiple fully-qualified CNAME targets
+    networks:
+      - public
+
+  # Example 10: Per-record-type network selection
+  multi-network-app:
+    image: nginx:alpine
+    labels:
+      dns.enable: "true"
+      dns.a.fqdn: "app.example.com"
+      dns.a.network: "ipv4_net"
+      dns.aaaa.fqdn: "app.example.com"
+      dns.aaaa.network: "ipv6_net"
+      # Different networks for each IP version
+    networks:
+      - ipv4_net
+      - ipv6_net
+      - internal
+
+  # Example 11: Per-record-type TTL
+  cached-service:
+    image: nginx:alpine
+    labels:
+      dns.enable: "true"
+      dns.fqdn: "cache.example.com"
+      dns.ttl: "60"  # Short TTL for frequent changes
+    networks:
+      - public
+
+  # Example 12: Complex subdomain with record name
+  deep-service:
+    image: nginx:alpine
+    labels:
+      dns.enable: "true"
+      dns.hostname: "api.v2"  # Hostname can contain dots (record name)
+      dns.domain: "staging.example.com"
+      # Creates api.v2.staging in zone example.com
+    networks:
+      - public
+
+  # Example 13: Explicitly ignored container
+  internal-cache:
+    image: redis:alpine
+    labels:
+      dns.ignore: "true"
+    networks:
+      - public
+
+  # Example 14: Auto-registered (only if REGISTER_ALL=true)
+  worker01:
+    image: myworker:latest
+    # No dns labels - will use container name "worker01" if REGISTER_ALL=true
+    networks:
+      - public
+
+  # Example 15: Multi-zone with specific zone selection
+  shared-db:
+    image: postgres:alpine
+    labels:
+      dns.enable: "true"
+      dns.hostname: "db"
+      dns.domain: "internal.local"
+      # Only registers in internal.local, not example.com
+    networks:
+      - public
+
+# Additional network examples
+networks:
+  ipv4_net:
+    driver: bridge
+  
+  ipv6_net:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 2001:db8:2::/64
+  
+  internal:
+    driver: bridge
+    internal: true
