@@ -2,7 +2,7 @@
 
 **Announce your containers to the world.**
 
-HeralDNS automatically registers Docker containers in DNS, making them discoverable on your network. Built for the IPv6-first future where every container can have a globally routable address.
+HeralDNS automatically registers Docker containers in DNS, making them discoverable on your network. Built for the IPv6-first future where every container can have a dynamic, globally routable address.
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/heraldns/sync)](https://hub.docker.com/r/heraldns/sync)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
