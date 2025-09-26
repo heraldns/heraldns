@@ -9,28 +9,30 @@ HeralDNS automatically registers Docker containers in DNS, making them discovera
 
 ## The Problem
 
-You're running Docker containers with IPv6 addresses that are globally routable. However, Watchtower updates your container, and its IP address changes.  Or your ISP changes your prefix. You want:
+You're running Docker containers with IPv6 addresses that are globally routable. However, Watchtower updates your container, and its IP address changes. Or your ISP changes your prefix, breaking your static assignments. You want:
 
 - Containers automatically registered in DNS when they start
-- DNS records updated when IP addresses change (dynamic prefixes)
+- DNS records updated when IP addresses change (dynamic addresses)
 - Both IPv4 and IPv6 support (A and AAAA records)
 - Secure updates to your DNS server
 - Fine-grained control over which containers get registered
 
-Traditional solutions like manual DNS entries break when address or prefixes change. NAT "solves" this but defeats the purpose of IPv6's global routability. Container-native DNS solutions don't integrate with your existing DNS infrastructure.
+Traditional solutions like manual DNS entries break when addresses or prefixes change. NAT "solves" this but defeats the purpose of IPv6's global routability. Container-native DNS solutions don't integrate with your existing DNS infrastructure.
 
 **HeralDNS solves this.** It watches your containers, detects IP changes, and keeps your DNS server in sync—automatically.
 
 ## Features
 
-- 🌍 **IPv6-First**: Built for globally routable IPv6, handles dynamic changes gracefully
-- 🔐 **Secure Authentication**: GSS-TSIG (Kerberos) for Active Directory DNS, TSIG keys for BIND/PowerDNS
+- 🌍 **IPv6-First**: Built for globally routable IPv6, handles dynamic addresses gracefully
+- 🔐 **Secure Authentication**: GSS-TSIG (Kerberos) for Active Directory, TSIG keys for BIND/PowerDNS
 - 🏷️ **Label-Based Control**: Fine-grained per-container configuration using Docker labels
 - 🔄 **Automatic Sync**: Detects IP changes and updates DNS in real-time
-- 🌐 **Multi-DNS Support**: Works with Active Directory, BIND, PowerDNS, and more
+- 🌐 **Multi-Provider Support**: Works with Active Directory, BIND, PowerDNS, and more
+- 📝 **Flexible Record Types**: A, AAAA, CNAME records with extensible architecture
 - 🎯 **Network Filtering**: Only register IPs from specific Docker networks
+- 🗂️ **Multi-Zone Support**: Update multiple DNS zones from a single deployment
 - 🧹 **Auto Cleanup**: Removes DNS records when containers stop
-- ⚙️ **Flexible Configuration**: Global defaults with per-container overrides
+- ⚙️ **Flexible Configuration**: Global defaults with per-container and per-record-type overrides
 
 ## Quick Start
 
@@ -47,17 +49,17 @@ services:
     environment:
       DNS_PROVIDER: "gss-tsig"
       DNS_SERVER: "dc01.example.com"
-      DNS_ZONE: "example.com"
+      DNS_ZONES: "example.com"
       KRB_PRINCIPAL: "svc-dns@EXAMPLE.COM"
       KRB_PASSWORD: "password"
       DEFAULT_NETWORK: "public"
-      DEFAULT_IP_VERSION: "both"
 
   # Your container - automatically registered!
   webapp:
     image: nginx
     labels:
-      dns.hostname: "www.example.com"
+      dns.enable: "true"
+      dns.fqdn: "www.example.com"
     networks:
       - public
 
@@ -77,7 +79,7 @@ services:
     environment:
       DNS_PROVIDER: "tsig"
       DNS_SERVER: "ns1.example.com"
-      DNS_ZONE: "example.com"
+      DNS_ZONES: "example.com,internal.local"
       TSIG_KEY_NAME: "update-key"
       TSIG_KEY_SECRET: "base64secret=="
       TSIG_ALGORITHM: "hmac-sha256"
@@ -99,65 +101,91 @@ Container stops → HeralDNS removes DNS record → Clean!
 
 ## Core Concepts
 
-### Registration Modes
+### Label-Based Record Creation
 
-**Explicit (default):** Only register containers with `dns.hostname` label
+HeralDNS uses a flexible label system: `dns.<type>.<attribute>`
+
+**Without type (creates both A and AAAA):**
 ```yaml
 services:
-  myapp:
+  webapp:
     labels:
-      dns.hostname: "app.example.com"
+      dns.enable: "true"
+      dns.fqdn: "api.example.com"
+      # Creates both A and AAAA records
 ```
 
-**Automatic:** Register all containers using their names
+**Type-specific records:**
+```yaml
+services:
+  ipv6only:
+    labels:
+      dns.enable: "true"
+      dns.aaaa.fqdn: "modern.example.com"
+      # Creates only AAAA record
+  
+  ipv4only:
+    labels:
+      dns.enable: "true"
+      dns.a.fqdn: "legacy.example.com"
+      # Creates only A record
+```
+
+**CNAME records (point to primary FQDN):**
+```yaml
+services:
+  webapp:
+    labels:
+      dns.enable: "true"
+      dns.fqdn: "api.example.com"  # Primary A/AAAA
+      dns.cname.hostname: "www,app"  # www and app → api.example.com
+```
+
+### Hostname vs FQDN
+
+Labels support flexible splitting of FQDNs:
+
+```yaml
+# All three are equivalent:
+
+# Option 1: Full FQDN
+dns.fqdn: "api.staging.example.com"
+
+# Option 2: Traditional hostname.domain
+dns.hostname: "api"
+dns.domain: "staging.example.com"
+
+# Option 3: Record name in zone
+dns.hostname: "api.staging"  # Can contain dots!
+dns.domain: "example.com"
+```
+
+All create record `api.staging` in zone `example.com`.
+
+### Multi-Zone Support
+
+Update multiple zones simultaneously:
+
 ```yaml
 environment:
-  REGISTER_ALL: "true"
+  DNS_ZONES: "example.com,internal.local"
 
 services:
-  web01:
-    # Registers as web01.example.com
-    
-  redis:
+  webapp:
     labels:
-      dns.ignore: "true"  # Explicitly excluded
+      dns.enable: "true"
+      dns.hostname: "api"  # No domain specified
+      # Creates: api.example.com AND api.internal.local
 ```
 
-### Network Filtering
-
-Prevent registering internal Docker IPs:
-
-```yaml
-environment:
-  DEFAULT_NETWORK: "public"  # Only check this network
-
-services:
-  app:
-    networks:
-      - public   # IP from here gets registered
-      - internal # IP from here ignored
-```
-
-Per-container override:
+Or specify explicit zone:
 ```yaml
 services:
-  app:
+  webapp:
     labels:
-      dns.network: "dmz"  # Use this network instead
-```
-
-### IP Version Control
-
-```yaml
-# Global default
-environment:
-  DEFAULT_IP_VERSION: "both"  # ipv4, ipv6, or both
-
-# Per-container override
-services:
-  modern-app:
-    labels:
-      dns.ip_version: "ipv6"  # IPv6 only
+      dns.enable: "true"
+      dns.hostname: "api"
+      dns.domain: "example.com"  # Only this zone
 ```
 
 ## Configuration
@@ -170,7 +198,7 @@ services:
 environment:
   DNS_PROVIDER: "gss-tsig"
   DNS_SERVER: "dc01.example.com"  # FQDN or IP
-  DNS_ZONE: "example.com"
+  DNS_ZONES: "example.com,corp.internal"
   KRB_PRINCIPAL: "svc-dns@EXAMPLE.COM"
   
   # Choose one authentication method:
@@ -185,7 +213,7 @@ environment:
 environment:
   DNS_PROVIDER: "tsig"
   DNS_SERVER: "ns1.example.com"
-  DNS_ZONE: "example.com"
+  DNS_ZONES: "example.com"
   TSIG_KEY_NAME: "update-key"
   TSIG_KEY_SECRET: "base64secret=="
   TSIG_ALGORITHM: "hmac-sha256"  # hmac-sha256, hmac-sha512, etc.
@@ -197,115 +225,174 @@ environment:
 |----------|----------|---------|-------------|
 | `DNS_PROVIDER` | Yes | - | `gss-tsig` or `tsig` |
 | `DNS_SERVER` | Yes | - | DNS server FQDN or IP |
-| `DNS_ZONE` | Yes | - | DNS zone to update |
+| `DNS_ZONES` | Yes | - | Comma-separated zones (e.g., `example.com,internal.local`) |
 | `REGISTER_ALL` | No | `false` | Register all containers by default |
+| `EXPLICIT_SUBDOMAINS` | No | `false` | Require exact zone match (true) vs allow subdomains (false) |
 | `DEFAULT_NETWORK` | No | (all) | Comma-separated network names |
-| `DEFAULT_IP_VERSION` | No | `both` | `ipv4`, `ipv6`, or `both` |
-| `DNS_TTL` | No | `300` | TTL in seconds |
+| `DNS_TTL` | No | `300` | Default TTL in seconds |
 | `POLL_INTERVAL` | No | `60` | Check interval in seconds |
 
 ### Container Labels
 
+#### Control Labels
+
 | Label | Description |
 |-------|-------------|
-| `dns.hostname` | Hostname to register (required unless `REGISTER_ALL=true`) |
-| `dns.ignore` | Set to `true` to skip registration |
+| `dns.enable` | Set to `"true"` to register (required unless `REGISTER_ALL=true`) |
+| `dns.ignore` | Set to `"true"` to skip registration |
+
+#### Record Labels (Without Type = Both A and AAAA)
+
+| Label | Description |
+|-------|-------------|
+| `dns.fqdn` | Full FQDN (e.g., `api.example.com`) |
+| `dns.hostname` | Hostname or record name (can contain dots) |
+| `dns.domain` | Domain or zone name |
 | `dns.network` | Network(s) to use for IP addresses |
-| `dns.ip_version` | `ipv4`, `ipv6`, or `both` |
+| `dns.ttl` | TTL for records |
+
+#### Type-Specific Records
+
+| Label | Description |
+|-------|-------------|
+| `dns.a.fqdn` / `dns.a.hostname` / `dns.a.domain` | A record only (IPv4) |
+| `dns.aaaa.fqdn` / `dns.aaaa.hostname` / `dns.aaaa.domain` | AAAA record only (IPv6) |
+| `dns.<type>.network` | Network for this record type |
+| `dns.<type>.ttl` | TTL for this record type |
+
+#### CNAME Records
+
+| Label | Description |
+|-------|-------------|
+| `dns.cname.hostname` | Comma-separated hostnames (points to primary FQDN) |
+| `dns.cname.fqdn` | Comma-separated FQDNs (points to primary FQDN) |
+| `dns.cname.domain` | Domain for CNAME hostnames |
+| `dns.cname.ttl` | TTL for CNAME records |
 
 ## Use Cases
 
-### 1. IPv6-First Home Lab
-
-You have globally routable IPv6 but your ISP uses dynamic prefixes:
+### 1. Web Server with Aliases
 
 ```yaml
-environment:
-  DNS_PROVIDER: "tsig"
-  DNS_SERVER: "192.168.1.1"  # Your router running BIND
-  DNS_ZONE: "home.lab"
-  DEFAULT_IP_VERSION: "ipv6"
-  DEFAULT_NETWORK: "public_v6"
-
-networks:
-  public_v6:
-    enable_ipv6: true
-    ipam:
-      config:
-        - subnet: "2001:db8::/64"  # Prefix changes? No problem!
-```
-
-### 2. Dual-Stack Public Services
-
-Run services accessible via both IPv4 and IPv6:
-
-```yaml
-environment:
-  DEFAULT_IP_VERSION: "both"
-  DEFAULT_NETWORK: "dmz"
-
 services:
   web:
+    image: nginx
     labels:
-      dns.hostname: "www.example.com"
-    # Gets both A and AAAA records
+      dns.enable: "true"
+      dns.fqdn: "web01.example.com"
+      dns.cname.hostname: "www,blog,shop"
+      # Creates: web01.example.com (A/AAAA)
+      # Plus CNAMEs: www → web01, blog → web01, shop → web01
 ```
 
-### 3. Development Environment with Active Directory
+### 2. API Versioning
 
-Auto-register dev containers in corporate AD DNS:
+```yaml
+services:
+  api-v2:
+    image: myapi:v2
+    labels:
+      dns.enable: "true"
+      dns.fqdn: "api-v2.example.com"
+      dns.cname.hostname: "api"
+      # api.example.com → api-v2.example.com (current version)
+```
+
+### 3. Multi-Zone Registration
 
 ```yaml
 environment:
-  DNS_PROVIDER: "gss-tsig"
-  DNS_SERVER: "dc.corp.internal"
-  DNS_ZONE: "dev.corp.internal"
-  REGISTER_ALL: "true"
-  DEFAULT_NETWORK: "dev_network"
+  DNS_ZONES: "example.com,internal.local"
 
 services:
-  api-v2:
-    # Automatically registers as api-v2.dev.corp.internal
+  database:
+    labels:
+      dns.enable: "true"
+      dns.hostname: "postgres"
+      # Creates both:
+      # - postgres.example.com
+      # - postgres.internal.local
 ```
 
-### 4. Multi-Network Containers
-
-Container on multiple networks, only expose one:
+### 4. IPv6-Only Modern Stack
 
 ```yaml
 services:
   app:
     labels:
-      dns.hostname: "app.example.com"
-      dns.network: "public"  # Only register this network's IP
+      dns.enable: "true"
+      dns.aaaa.fqdn: "app.example.com"
+      dns.aaaa.network: "ipv6_public"
+      # Only AAAA record, specific network
+```
+
+### 5. Complex Subdomain Structure
+
+```yaml
+environment:
+  DNS_ZONES: "example.com"
+  EXPLICIT_SUBDOMAINS: "false"
+
+services:
+  staging-api:
+    labels:
+      dns.enable: "true"
+      dns.hostname: "api"
+      dns.domain: "staging.example.com"
+      # Creates api.staging in zone example.com
+```
+
+### 6. Dual-Stack with Network Separation
+
+```yaml
+services:
+  gateway:
+    labels:
+      dns.enable: "true"
+      dns.a.fqdn: "gateway.example.com"
+      dns.a.network: "ipv4_public"
+      dns.aaaa.fqdn: "gateway.example.com"
+      dns.aaaa.network: "ipv6_public"
+      # Different networks for each IP version
     networks:
-      - public
-      - backend
-      - cache
+      - ipv4_public
+      - ipv6_public
 ```
 
 ## Why HeralDNS?
 
 ### The IPv6 Reality
 
-IPv6 gives every container a globally routable address—no NAT needed. But dynamic prefixes from ISPs break static DNS. HeralDNS embraces this reality:
+IPv6 gives every container a globally routable address—no NAT needed. But container restarts and ISP prefix changes make static DNS impractical. HeralDNS embraces this reality:
 
-- Automatically updates DNS when prefixes change
+- Automatically updates DNS when containers restart with new IPs
+- Handles ISP prefix changes transparently
 - No manual intervention required
 - Works with standard DNS infrastructure
 - Respects IPv6's end-to-end principle
 
 ### Comparison to Alternatives
 
-| Solution | IPv6 Dynamic Prefixes | Existing DNS Integration | Secure Updates | Per-Container Control |
-|----------|----------------------|-------------------------|----------------|----------------------|
-| **HeralDNS** | ✅ | ✅ | ✅ | ✅ |
-| Manual DNS entries | ❌ | ✅ | ✅ | ✅ |
-| Container DNS servers | ✅ | ❌ | N/A | ✅ |
-| DynDNS services | ⚠️ (whole host) | ⚠️ | ⚠️ | ❌ |
-| Traefik/proxy DNS | ✅ | ❌ | N/A | ✅ |
+| Solution | Dynamic IPs | Existing DNS Integration | Secure Updates | Per-Container Control | Multiple Record Types |
+|----------|-------------|-------------------------|----------------|----------------------|----------------------|
+| **HeralDNS** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Manual DNS entries | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Container DNS servers | ✅ | ❌ | N/A | ✅ | ⚠️ |
+| DynDNS services | ⚠️ (whole host) | ⚠️ | ⚠️ | ❌ | ❌ |
+| Traefik/proxy DNS | ✅ | ❌ | N/A | ✅ | ❌ |
 
 ## Advanced Usage
+
+### SRV and Other Record Types (Coming Soon)
+
+```yaml
+services:
+  app:
+    labels:
+      dns.srv.hostname: "_http._tcp"
+      dns.srv.target: "app.example.com"
+      dns.srv.port: "8080"
+```
 
 ### Multiple DNS Servers (Coming Soon)
 
@@ -313,10 +400,6 @@ IPv6 gives every container a globally routable address—no NAT needed. But dyna
 environment:
   DNS_SERVERS: "ns1.example.com,ns2.example.com"
 ```
-
-### Custom DNS Providers (Coming Soon)
-
-Support for Cloudflare API, Route53, etc.
 
 ### Event-Driven Updates (Coming Soon)
 
